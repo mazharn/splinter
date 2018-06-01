@@ -91,8 +91,8 @@ impl Executable for Server {
 /// of Netbricks.
 fn setup_server<S>(
     config: &config::ServerConfig,
-    ports: Vec<CacheAligned<PortQueue>>,
-    sibling: CacheAligned<PortQueue>,
+    ports: Vec<Arc<CacheAligned<PortQueue>>>,
+    siblings: Vec<(i32, Arc<CacheAligned<PortQueue>>)>,
     scheduler: &mut S,
     core: i32,
     master: &Arc<Master>,
@@ -113,7 +113,7 @@ fn setup_server<S>(
     let dispatch = Dispatch::new(
         config,
         ports[0].clone(),
-        sibling.clone(),
+        siblings.clone(),
         Arc::clone(master),
         Arc::clone(&sched),
         ports[0].rxq(),
@@ -127,10 +127,11 @@ fn setup_server<S>(
     match scheduler.add_task(Server::new(sched)) {
         Ok(_) => {
             info!(
-                "Successfully added scheduler(TID {}) with rx,tx,sibling queues {:?} to core {}.",
+                "Successfully added scheduler(TID {}) with rx,tx,sibling queues {:?} to core {:?}.",
                 tid,
-                (ports[0].rxq(), ports[0].txq(), sibling.rxq()),
-                core
+                (ports[0].rxq(), ports[0].txq(),
+                siblings.iter().map(|sibling| sibling.0).collect::<Vec<i32>>()),
+                core,
             );
         }
 
@@ -234,8 +235,8 @@ fn main() {
 
     // Create tenants with data and extensions for YCSB.
     for tenant in 1..(config.num_tenants + 1) {
-        // master.fill_test(tenant, 1, 1 * 1000 * 1000);
-        master.fill_tao(tenant, 500000);
+        master.fill_test(tenant, 1, 1 * 1000 * 1000);
+        //master.fill_tao(tenant, 500000);
         master.load_test(tenant);
     }
 
@@ -259,8 +260,8 @@ fn main() {
     // Setup the server pipeline.
     net_context.start_schedulers();
     net_context.add_pipeline_to_run(Arc::new(
-        move |ports, scheduler: &mut StandaloneScheduler, core: i32, sibling| {
-            setup_server(&config, ports, sibling, scheduler, core, &cmaster, &chandle)
+        move |ports, scheduler: &mut StandaloneScheduler, core: i32, siblings| {
+            setup_server(&config, ports, siblings, scheduler, core, &cmaster, &chandle)
         },
     ));
 
@@ -274,7 +275,7 @@ fn main() {
     // Check for misbehaving tasks here.
     loop {
         // Scan schedulers every few milliseconds.
-        sleep(Duration::from_millis(SCAN_INTERVAL_MS));
+        /*sleep(Duration::from_millis(SCAN_INTERVAL_MS));
 
         for sched in handles.write().iter_mut() {
             // Get the current time stamp to compare scheduler time stamps against.
@@ -346,7 +347,7 @@ fn main() {
             *sched = new;
             sched.enqueue_many(tasks);
             sched.append_resps(&mut resps);
-        }
+        }*/
     }
 
     // Stop the server.

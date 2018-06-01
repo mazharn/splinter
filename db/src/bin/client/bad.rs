@@ -158,7 +158,7 @@ impl YcsbSend {
     /// A YCSB request generator.
     fn new(
         config: &config::ClientConfig,
-        port: CacheAligned<PortQueue>,
+        port: Arc<CacheAligned<PortQueue>>,
         reqs: u64,
         dst_ports: u16,
     ) -> YcsbSend {
@@ -292,7 +292,7 @@ where
     ///
     /// A YCSB response receiver that measures the median latency and throughput of a Sandstorm
     /// server.
-    fn new(port: T, resps: u64) -> YcsbRecv<T> {
+    fn new(port: Arc<T>, resps: u64) -> YcsbRecv<T> {
         YcsbRecv {
             receiver: dispatch::Receiver::new(port),
             responses: resps,
@@ -378,7 +378,7 @@ where
 /// * `scheduler`: Netbricks scheduler to which YcsbSend will be added.
 fn setup_send<S>(
     config: &config::ClientConfig,
-    ports: Vec<CacheAligned<PortQueue>>,
+    ports: Vec<Arc<CacheAligned<PortQueue>>>,
     scheduler: &mut S,
     _core: i32,
 ) where
@@ -416,7 +416,7 @@ fn setup_send<S>(
 ///
 /// * `ports`:     Network port on which packets will be sent.
 /// * `scheduler`: Netbricks scheduler to which YcsbRecv will be added.
-fn setup_recv<S>(ports: Vec<CacheAligned<PortQueue>>, scheduler: &mut S, _core: i32)
+fn setup_recv<S>(ports: Vec<Arc<CacheAligned<PortQueue>>>, scheduler: &mut S, _core: i32)
 where
     S: Scheduler + Sized,
 {

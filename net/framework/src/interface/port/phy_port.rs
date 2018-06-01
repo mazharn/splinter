@@ -32,6 +32,7 @@ pub struct PortQueue {
     pub port: Arc<PmdPort>,
     stats_rx: Arc<CacheAligned<PortStats>>,
     stats_tx: Arc<CacheAligned<PortStats>>,
+    queue_depth: Arc<CacheAligned<PortStats>>,
     port_id: i32,
     txq: i32,
     rxq: i32,
@@ -90,6 +91,21 @@ impl PortQueue {
     pub fn rxq(&self) -> i32 {
         self.rxq
     }
+
+    pub fn incr_queue_depth(&self, num_pkts: usize) {
+        let update = self.queue_depth.stats.load(Ordering::Relaxed) + num_pkts as usize;
+        self.queue_depth.stats.store(update, Ordering::Relaxed);
+    }
+
+    pub fn decr_queue_depth(&self, num_pkts: usize) {
+        let update = self.queue_depth.stats.load(Ordering::Relaxed) - num_pkts;
+        self.queue_depth.stats.store(update, Ordering::Relaxed);
+    }
+
+    pub fn get_queue_depth(&self) -> usize {
+        self.queue_depth.stats.load(Ordering::Relaxed)
+    }
+
 }
 
 impl PacketTx for PortQueue {
@@ -159,6 +175,7 @@ impl PmdPort {
                 rxq: rxq,
                 stats_rx: port.stats_rx[rxq as usize].clone(),
                 stats_tx: port.stats_tx[txq as usize].clone(),
+                queue_depth: port.stats_rx[rxq as usize].clone(),
             }))
         }
     }
