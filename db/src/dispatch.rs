@@ -662,8 +662,8 @@ impl Dispatch
     #[inline]
     #[allow(dead_code)]
     fn select_sibling(&mut self) -> usize {
-        let one = self.last_selected_sibling;
-        //let one = self.rng.gen_range::<usize>(0, self.num_of_siblings);
+        //let one = self.last_selected_sibling;
+        let one = self.rng.gen_range::<usize>(0, self.num_of_siblings);
         let two = self.rng.gen_range::<usize>(0, self.num_of_siblings);
 
         let s1_queue_depth = self.sibling_ports[one]
