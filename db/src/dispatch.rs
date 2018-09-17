@@ -51,10 +51,14 @@ where
 
     /// The network port/interface on which this dispatcher receives and
     /// transmits RPC requests and responses on.
-    network_port: T,
+    network_port: Arc<T>,
 
-    /// The receive queue over which this dispatcher steals RPC requests from.
-    sibling_port: T,
+    /// The receive queues over which this dispatcher steals RPC requests from.
+    sibling_ports: Vec<(i32, Arc<T>)>,
+
+    /// Sibling id is indexed into sibling_ports vector to select the sibling
+    /// to steal packets from.
+    sibling_id: usize,
 
     /// The IP address of the server. This is required to ensure that the
     /// server does not process packets that were destined to a different
@@ -125,8 +129,8 @@ where
     /// A dispatcher of type ServerDispatch capable of receiving RPCs, and responding to them.
     pub fn new(
         config: &config::ServerConfig,
-        net_port: T,
-        sib_port: T,
+        net_port: Arc<T>,
+        sib_ports: Vec<(i32, Arc<T>)>,
         master: Arc<Master>,
         sched: Arc<RoundRobin>,
         id: i32,
@@ -180,7 +184,8 @@ where
             master_service: master,
             scheduler: sched,
             network_port: net_port.clone(),
-            sibling_port: sib_port.clone(),
+            sibling_ports: sib_ports.clone(),
+            sibling_id: 0,
             network_ip_addr: ip_src_addr,
             max_rx_packets: rx_batch_size,
             resp_udp_header: udp_header,
@@ -260,7 +265,7 @@ where
     ///
     /// A vector of packets wrapped up in Netbrick's Packet<NullHeader, EmptyMetadata> type if
     /// there was anything received at the network port.
-    fn try_steal_packets(&self) -> Option<Vec<Packet<NullHeader, EmptyMetadata>>> {
+    fn try_steal_packets(&mut self) -> Option<Vec<Packet<NullHeader, EmptyMetadata>>> {
         // Allocate a vector of mutable MBuf pointers into which packets will
         // be received.
         let mut mbuf_vector = Vec::with_capacity(self.max_rx_packets as usize);
@@ -271,8 +276,12 @@ where
         unsafe {
             mbuf_vector.set_len(self.max_rx_packets as usize);
 
+            // Increment sibling_id so we steal from
+            // next sibling.
+            self.sibling_id = (self.sibling_id + 1) % self.sibling_ports.len();
+
             // Try to receive packets from the sibling.
-            match self.sibling_port.recv(&mut mbuf_vector[..]) {
+            match self.sibling_ports[self.sibling_id].1.recv(&mut mbuf_vector[..]) {
                 // The receive call returned successfully.
                 Ok(num_received) => {
                     if num_received == 0 {

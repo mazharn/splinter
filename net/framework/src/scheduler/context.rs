@@ -35,9 +35,9 @@ impl<'a> BarrierHandle<'a> {
 #[derive(Default)]
 pub struct NetBricksContext {
     pub ports: HashMap<String, Arc<PmdPort>>,
-    pub rx_queues: HashMap<i32, Vec<CacheAligned<PortQueue>>>,
+    pub rx_queues: HashMap<i32, Vec<Arc<CacheAligned<PortQueue>>>>,
     pub active_cores: Vec<i32>,
-    pub siblings: HashMap<i32, CacheAligned<PortQueue>>,
+    pub siblings: HashMap<i32, Vec<(i32, Arc<CacheAligned<PortQueue>>)>>,
     pub virtual_ports: HashMap<i32, Arc<VirtualPort>>,
     scheduler_channels: HashMap<i32, SyncSender<SchedulerCommand>>,
     scheduler_handles: HashMap<i32, JoinHandle<()>>,
@@ -72,7 +72,7 @@ impl NetBricksContext {
     /// Run a function (which installs a pipeline) on all schedulers in the system.
     pub fn add_pipeline_to_run<T>(&mut self, run: Arc<T>)
     where
-        T: Fn(Vec<AlignedPortQueue>, &mut StandaloneScheduler, i32, AlignedPortQueue) + Send + Sync + 'static,
+        T: Fn(Vec<Arc<AlignedPortQueue>>, &mut StandaloneScheduler, i32, Vec<(i32, Arc<AlignedPortQueue>)>) + Send + Sync + 'static,
     {
         for (core, channel) in &self.scheduler_channels {
             let ports = match self.rx_queues.get(core) {
@@ -80,11 +80,11 @@ impl NetBricksContext {
                 None => vec![],
             };
             let id = *core;
-            let sibling = self.siblings.get(core).unwrap().clone();
+            let siblings = self.siblings.get(core).unwrap().clone();
             let boxed_run = run.clone();
             channel
                 .send(SchedulerCommand::Run(Arc::new(move |s| {
-                    boxed_run(ports.clone(), s, id, sibling.clone())
+                    boxed_run(ports.clone(), s, id, siblings.clone())
                 })))
                 .unwrap();
         }
@@ -130,7 +130,7 @@ impl NetBricksContext {
 
     /// Install a pipeline on a particular core.
     pub fn add_pipeline_to_core<
-        T: Fn(Vec<AlignedPortQueue>, &mut StandaloneScheduler, i32, AlignedPortQueue) + Send + Sync + 'static,
+        T: Fn(Vec<Arc<AlignedPortQueue>>, &mut StandaloneScheduler, i32, Vec<(i32, Arc<AlignedPortQueue>)>) + Send + Sync + 'static,
     >(
         &mut self,
         core: i32,
@@ -141,11 +141,11 @@ impl NetBricksContext {
                 Some(v) => v.clone(),
                 None => vec![],
             };
-            let sibling = self.siblings.get(&core).unwrap().clone();
+            let siblings = self.siblings.get(&core).unwrap().clone();
             let boxed_run = run.clone();
             channel
                 .send(SchedulerCommand::Run(Arc::new(move |s| {
-                    boxed_run(ports.clone(), s, core, sibling.clone())
+                    boxed_run(ports.clone(), s, core, siblings.clone())
                 })))
                 .unwrap();
             Ok(())
@@ -244,7 +244,7 @@ pub fn initialize_system(configuration: &NetbricksConfiguration) -> Result<NetBr
                 let rx_q = rx_q as i32;
                 match PmdPort::new_queue_pair(port_instance, rx_q, rx_q) {
                     Ok(q) => {
-                        ctx.rx_queues.entry(*core).or_insert_with(|| vec![]).push(q);
+                        ctx.rx_queues.entry(*core).or_insert_with(|| vec![]).push(Arc::new(q));
                     }
                     Err(e) => {
                         return Err(ErrorKind::ConfigurationError(format!(
@@ -275,17 +275,22 @@ pub fn initialize_system(configuration: &NetbricksConfiguration) -> Result<NetBr
     ctx.active_cores.sort();
 
     // Populate every core's sibling receive queue.
-    for idx in 0..(ctx.active_cores.len() - 1) {
-        // A core's sibling is it's neighbour.
-        let sibling = ctx.rx_queues.get(&ctx.active_cores[idx + 1]).unwrap();
-        ctx.siblings.insert(ctx.active_cores[idx], sibling[0].clone());
-    }
+    for idx in 0..ctx.active_cores.len() {
+        let mut siblings = vec![];
 
-    // The last core's sibling is the first core's receive queue.
-    {
-        let last = ctx.active_cores.len() - 1;
-        let sibling = ctx.rx_queues.get(&ctx.active_cores[0]).unwrap();
-        ctx.siblings.insert(ctx.active_cores[last], sibling[0].clone());
+        // Push siblings in order starting from right to end
+        for core in (idx+1)..ctx.active_cores.len() {
+            let sibling = Arc::clone(&ctx.rx_queues.get(&ctx.active_cores[core]).unwrap()[0]);
+            let rxq = sibling.rxq();
+            siblings.push((rxq, sibling));
+        }
+        // Push siblings in order starting from first
+        for core in 0..idx {
+            let sibling = Arc::clone(&ctx.rx_queues.get(&ctx.active_cores[core]).unwrap()[0]);
+            let rxq = sibling.rxq();
+            siblings.push((rxq, sibling));
+        }
+        ctx.siblings.insert(ctx.active_cores[idx], siblings); 
     }
 
     Ok(ctx)

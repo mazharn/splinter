@@ -91,7 +91,7 @@ impl AggregateSend {
     /// * `dst_ports`: The total number of UDP ports the server is listening on.
     pub fn new(
         config: &config::ClientConfig,
-        port: CacheAligned<PortQueue>,
+        port: Arc<CacheAligned<PortQueue>>,
         reqs: u64,
         dst_ports: u16,
     ) -> AggregateSend {
@@ -239,10 +239,10 @@ impl AggregateRecv {
     ///
     /// A receiver that measures the median latency and throughput of a Sandstorm server.
     fn new(
-        port: CacheAligned<PortQueue>,
+        port: Arc<CacheAligned<PortQueue>>,
         resps: u64,
         native: bool,
-        send: CacheAligned<PortQueue>,
+        send: Arc<CacheAligned<PortQueue>>,
         dst_ports: u16,
         config: &config::ClientConfig,
     ) -> AggregateRecv {
@@ -369,7 +369,7 @@ impl Executable for AggregateRecv {
 /// * `scheduler`: Netbricks scheduler to which AggregateSend will be added.
 fn setup_send<S>(
     config: &config::ClientConfig,
-    ports: Vec<CacheAligned<PortQueue>>,
+    ports: Vec<Arc<CacheAligned<PortQueue>>>,
     scheduler: &mut S,
     _core: i32,
 ) where
@@ -412,11 +412,11 @@ fn setup_send<S>(
 /// * `send`:      Network port on which packets will be sent.
 /// * `config`:    Network related configuration such as the MAC and IP address.
 fn setup_recv<S>(
-    ports: Vec<CacheAligned<PortQueue>>,
+    ports: Vec<Arc<CacheAligned<PortQueue>>>,
     scheduler: &mut S,
     _core: i32,
     native: bool,
-    send: Vec<CacheAligned<PortQueue>>,
+    send: Vec<Arc<CacheAligned<PortQueue>>>,
     config: &config::ClientConfig,
 ) where
     S: Scheduler + Sized,

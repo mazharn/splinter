@@ -26,6 +26,8 @@ use e2d2::headers::IpHeader;
 use e2d2::interface::Packet;
 
 use spin::RwLock;
+use std::sync::Arc;
+use task::TaskPriority;
 
 /// A simple round robin scheduler for Tasks in Sandstorm.
 pub struct RoundRobin {
@@ -50,6 +52,9 @@ pub struct RoundRobin {
     // Response packets returned by completed tasks. Will be picked up and sent out the network by
     // the Dispatch task.
     responses: RwLock<Vec<Packet<IpHeader, EmptyMetadata>>>,
+
+    // Sibling schedulers to steal from the tasks that are already constructed.
+    sibling_scheds: Arc<RwLock<Vec<Arc<RoundRobin>>>>,
 }
 
 // Implementation of methods on RoundRobin.
@@ -69,6 +74,7 @@ impl RoundRobin {
             core: AtomicIsize::new(core as isize),
             waiting: RwLock::new(VecDeque::new()),
             responses: RwLock::new(Vec::new()),
+            sibling_scheds: Arc::new(RwLock::new(Vec::with_capacity(8))),
         }
     }
 
@@ -129,6 +135,11 @@ impl RoundRobin {
         self.responses.write().append(resps);
     }
 
+    /// Adds sibling schedulers
+    pub fn add_siblings(&self, sibs: &mut Arc<RwLock<Vec<Arc<RoundRobin>>>>) {
+        self.sibling_scheds.write().append(&mut sibs.write());
+    }
+
     /// Returns the time-stamp at which the latest scheduling decision was made.
     #[inline]
     pub fn latest(&self) -> u64 {
@@ -155,6 +166,14 @@ impl RoundRobin {
 
     /// Picks up a task from the waiting queue, and runs it until it either yields or completes.
     pub fn poll(&self) {
+        // Sibling id indexed into sibling_scheds Vec to select sibling to steal
+        // work from. It is incremented after each selection so we move further right when stealing
+        // work in later iterations.
+        let mut sibling_id: usize = 0;
+
+        // Lets scheduler take turns between its own NIC queue and sibling's tasks queue.
+        let mut sibling_turn: bool = false;
+
         loop {
             // Set the time-stamp of the latest scheduling decision.
             self.latest
@@ -183,6 +202,61 @@ impl RoundRobin {
                     // The task did not complete execution. Add it back to the waiting list so that it
                     // gets to run again.
                     self.waiting.write().push_back(task);
+                }
+            }
+
+            if self.waiting.write().len() == 1 {
+                // Tried its own NIC queue, then sibling's NIC queue
+                // but found no work.
+
+                if sibling_turn {
+                    // Swith flag so next time sched polls its own NIC queue.
+                    sibling_turn = false;
+
+                    let mut task: Option<Box<Task>> = None;
+
+                    // Assuming we have 8 schedulers.
+                    sibling_id = (sibling_id + 1) % 7;
+
+                    // Try stealing from sibling's tasks queue
+                    if let Some(sibs) = self.sibling_scheds.try_write() {
+                        if let Some(mut sib_waiting_queue) = sibs[sibling_id].waiting.try_write() {
+                            if sib_waiting_queue.len() > 1 {
+                                // There are tasks to steal.
+                                //task = sib_waiting_queue.front().as_ref().unwrap();
+
+                                //if task.priority() != TaskPriority::DISPATCH {
+                                if sib_waiting_queue.front().unwrap().priority()
+                                    != TaskPriority::DISPATCH
+                                {
+                                    task = sib_waiting_queue.pop_front();
+                                } else {
+                                    task = sib_waiting_queue.pop_back();
+                                }
+                            }
+                        }
+                    }
+
+                    if task.is_some() {
+                        if let Some(mut task) = task {
+                            if task.run().0 == COMPLETED {
+                                // The task finished execution, check for request and response packets. If they
+                                // exist, then free the request packet, and enqueue the response packet.
+                                if let Some((req, res)) = unsafe { task.tear() } {
+                                    req.free_packet();
+                                    self.responses
+                                        .write()
+                                        .push(rpc::fixup_header_length_fields(res));
+                                }
+                            } else {
+                                // The task did not complete execution. Add it back to the waiting list so that it
+                                // gets to run again.
+                                self.waiting.write().push_back(task);
+                            }
+                        }
+                    }
+                } else {
+                    sibling_turn = true;
                 }
             }
         }

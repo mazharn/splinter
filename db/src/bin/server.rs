@@ -97,8 +97,8 @@ impl Executable for Server {
 /// of Netbricks.
 fn setup_server<S>(
     config: &config::ServerConfig,
-    ports: Vec<CacheAligned<PortQueue>>,
-    sibling: CacheAligned<PortQueue>,
+    ports: Vec<Arc<CacheAligned<PortQueue>>>,
+    siblings: Vec<(i32, Arc<CacheAligned<PortQueue>>)>,
     scheduler: &mut S,
     core: i32,
     master: &Arc<Master>,
@@ -119,7 +119,7 @@ fn setup_server<S>(
     let dispatch = Dispatch::new(
         config,
         ports[0].clone(),
-        sibling.clone(),
+        siblings.clone(),
         Arc::clone(master),
         Arc::clone(&sched),
         ports[0].rxq(),
@@ -133,9 +133,9 @@ fn setup_server<S>(
     match scheduler.add_task(Server::new(sched)) {
         Ok(_) => {
             info!(
-                "Successfully added scheduler(TID {}) with rx,tx,sibling queues {:?} to core {}.",
+                "Successfully added scheduler(TID {}) with rx,tx,sibling queues {:?} to core {:?}.",
                 tid,
-                (ports[0].rxq(), ports[0].txq(), sibling.rxq()),
+                (ports[0].rxq(), ports[0].txq(), siblings.iter().map(|sibling| sibling.0).collect::<Vec<i32>>()),
                 core
             );
         }
@@ -291,8 +291,8 @@ fn main() {
     // Setup the server pipeline.
     net_context.start_schedulers();
     net_context.add_pipeline_to_run(Arc::new(
-        move |ports, scheduler: &mut StandaloneScheduler, core: i32, sibling| {
-            setup_server(&config, ports, sibling, scheduler, core, &cmaster, &chandle)
+        move |ports, scheduler: &mut StandaloneScheduler, core: i32, siblings| {
+            setup_server(&config, ports, siblings, scheduler, core, &cmaster, &chandle)
         },
     ));
 
@@ -307,8 +307,24 @@ fn main() {
         let mut installer = Installer::new(imaster, install_addr);
         installer.execute();
     });
+    // Wait for some time for schedulers to be set up.
+    sleep(Duration::from_millis(1000));
 
-    // Run the server, and give it some time to bootup.
+
+    // Pass sibling schedulers to all schedulers.
+    let scheds = handles.write();
+    for idx1 in 0..scheds.len() {
+        let mut siblings = Arc::new(RwLock::new(Vec::with_capacity(8)));
+        for idx2 in 0..scheds.len() {
+            if scheds[idx1].core() != scheds[idx2].core() {
+                // A scheduler is not its own sibling.
+                siblings.write().push(Arc::clone(&scheds[idx2]));
+            }
+        }
+        scheds[idx1].add_siblings(&mut siblings);
+    }
+
+    // Run the server and give it some time to bootup.
     net_context.execute();
     sleep(Duration::from_millis(1000));
 
