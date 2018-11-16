@@ -16,6 +16,7 @@
 #![feature(type_ascription)]
 #![feature(generator_trait)]
 #![feature(rustc_private)]
+#![feature(asm)]
 
 pub mod db;
 pub mod buf;
@@ -23,6 +24,7 @@ pub mod null;
 pub mod mock;
 pub mod pack;
 pub mod allocator;
+pub mod cycles;
 
 pub use std::vec;
 pub use std::result;
