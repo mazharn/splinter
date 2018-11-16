@@ -33,6 +33,8 @@ use super::e2d2::common::EmptyMetadata;
 use super::e2d2::headers::*;
 use super::e2d2::interface::*;
 
+use cyclecounter::CycleCounter;
+
 /// This type represents a requests-dispatcher in Sandstorm. When added to a
 /// Netbricks scheduler, this dispatcher polls a network port for RPCs,
 /// dispatches them to a service, and sends out responses on the same network
@@ -100,6 +102,8 @@ where
 
     /// Unique identifier for a Dispatch task. Currently required for measurement purposes.
     id: i32,
+
+    cycle_counter: CycleCounter,
 }
 
 impl<T> Dispatch<T>
@@ -132,6 +136,7 @@ where
         id: i32,
     ) -> Dispatch<T> {
         let rx_batch_size: u8 = 32;
+        let measurement_count: u64 = 100;
 
         // Create a common udp header for response packets.
         let udp_src_port: u16 = config.udp_port;
@@ -193,6 +198,7 @@ where
             time: 0,
             priority: TaskPriority::DISPATCH,
             id: id,
+            cycle_counter: CycleCounter::new(measurement_count),
         }
     }
 
@@ -223,6 +229,7 @@ where
                         return None;
                     }
 
+                    //info!("{}", num_received);
                     // Allocate a vector for the received packets.
                     let mut recvd_packets = Vec::<Packet<NullHeader, EmptyMetadata>>::with_capacity(
                         self.max_rx_packets as usize,
@@ -626,8 +633,12 @@ where
             self.try_send_packets(responses);
         }
 
+        self.cycle_counter.start();
+
         // Next, try to receive packets from the network.
         if let Some(packets) = self.try_receive_packets() {
+            self.cycle_counter.stop();
+
             // Perform basic network processing on the received packets.
             let mut packets = self.parse_mac_headers(packets);
             let mut packets = self.parse_ip_headers(packets);
