@@ -22,6 +22,7 @@ use super::tenant::Tenant;
 use super::wireformat::{InvokeRequest, InvokeResponse};
 
 use sandstorm::buf::{MultiReadBuf, ReadBuf, WriteBuf};
+use sandstorm::cycles::Cycles;
 use sandstorm::db::DB;
 
 use e2d2::common::EmptyMetadata;
@@ -67,6 +68,10 @@ pub struct Context {
     // The total number of bytes allocated by the extension so far
     // (on the table heap).
     allocs: Cell<usize>,
+
+    // The cycle counter that will be used to profile the DB functions like get()
+    // put(), multiget(), etc.
+    counter: RefCell<Cycles>,
 }
 
 // Methods on Context.
@@ -105,6 +110,7 @@ impl Context {
             tenant: tenant,
             heap: alloc,
             allocs: Cell::new(0),
+            counter: RefCell::new(Cycles::new()),
         }
     }
 
@@ -147,7 +153,7 @@ impl DB for Context {
         // return a MultiReadBuf to the extension.
         if let Some(table) = self.tenant.get_table(table_id) {
             let mut objs = Vec::new();
-
+            self.counter.borrow_mut().start();
             // Iterate through the list of keys. Lookup each one of them at the database.
             for key in keys.chunks(key_len as usize) {
                 if key.len() != key_len as usize {
@@ -166,6 +172,7 @@ impl DB for Context {
                     return None;
                 }
             }
+            self.counter.borrow_mut().stop();
 
             unsafe {
                 return Some(MultiReadBuf::new(objs));

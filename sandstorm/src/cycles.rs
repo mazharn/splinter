@@ -39,12 +39,12 @@ impl Cycles {
         }
     }
 
-    fn start(&mut self) {
+    pub fn start(&mut self) {
         self.start = rdtsc();
         self.count+=1;
     }
 
-    fn stop(&mut self) {
+    pub fn stop(&mut self) {
         if self.count == MAXCOUNT {
             println!("Cycles {}", self.total/self.count);
             self.count=0;
